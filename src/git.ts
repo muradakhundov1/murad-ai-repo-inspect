@@ -3,7 +3,8 @@ import { existsSync } from "node:fs";
 import type { ChangedFile } from "./types.js";
 
 function git(repositoryPath: string, args: string[]): string {
-  return execFileSync("git", args, {
+  // a repo can set core.fsmonitor to any command and git diff would run it
+  return execFileSync("git", ["-c", "core.fsmonitor=false", ...args], {
     cwd: repositoryPath,
     encoding: "utf8",
     maxBuffer: 50 * 1024 * 1024,

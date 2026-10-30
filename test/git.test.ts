@@ -52,6 +52,16 @@ describe("reviewRepository git inspection", () => {
     expect(readdirSync(dir).some((name) => name.startsWith("pwned"))).toBe(false);
   });
 
+  it("does not run commands from the repository's git config", async () => {
+    const dir = makeRepo();
+    const marker = join(dirname(dir), "fsmonitor-ran");
+    run(dir, ["config", "core.fsmonitor", `touch '${marker}'; false`]);
+
+    await reviewRepository({ repositoryPath: dir });
+
+    expect(existsSync(marker)).toBe(false);
+  });
+
   it("gives clear errors for unknown refs and non-repositories", async () => {
     const dir = makeRepo();
     await expect(reviewRepository({ repositoryPath: dir, baseRef: "nope" })).rejects.toThrow(
