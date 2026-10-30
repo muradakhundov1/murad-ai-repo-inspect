@@ -45,37 +45,80 @@ npm run typecheck
 npm test
 ```
 
+## Interfaces (hybrid)
+
+Both interfaces call the same `reviewRepository()` in `src/core.ts` and the
+same `renderReport()` in `src/report.ts`, so file detection, base branch
+detection and error messages are the same. The difference is what each one is
+allowed to do:
+
+| | CLI | MCP |
+|---|---|---|
+| Who runs it | a developer or CI, in their own shell | an AI agent |
+| Runs validation commands | yes (`--validate`) | no, read-only |
+| Which repos | any path | only inside the allowed root |
+| Default format | markdown | json |
+| File list | full | first 300 (`totalChangedFiles` has the real count) |
+
+### What counts as "changed"
+
+Everything on the current branch that is not in the base: commits since
+`git merge-base <base> HEAD`, uncommitted changes and untracked files
+(ignored files are skipped). Renames are detected. If no base is given the
+tool tries `origin/HEAD`, then `main`, then `master`.
+
 ## CLI
 
 ```bash
-npm run inspector -- review --repo ./path/to/repo --format markdown
-npm run inspector -- review --repo ./path/to/repo --validate "npm test"
+npm run inspector -- review --repo ./path/to/repo
+npm run inspector -- review --repo ./path/to/repo --base-ref develop --validate "npm test" --validate "npm run lint"
+npm run inspector -- review --repo ./path/to/repo --format json --output -
 ```
 
-The report is written to `review-report.md`.
+| Option | Default | |
+|---|---|---|
+| `--repo <path>` | required | repository to inspect |
+| `--base-ref <ref>` | origin/HEAD, main, master | branch or commit to compare with |
+| `--validate <command>` | none | shell command run in the repo root, can be repeated |
+| `--timeout <seconds>` | 300 | per validation command |
+| `--format markdown\|json` | markdown | |
+| `--output <file>` | `review-report.md` | `-` writes to stdout |
+
+Exit codes: `0` ok, `1` a validation command failed or timed out, `2` the
+review could not run (bad arguments, not a repo, unknown ref).
+
+`--validate` runs the command through a shell with your permissions. Only use
+commands you would run yourself.
 
 ## MCP
 
-Start the stdio server with:
-
 ```bash
-npm run mcp-server
+INSPECTOR_ALLOWED_ROOT=/path/to/workspace npm run mcp-server
 ```
 
-It exposes a `review_repository` tool. Inspect the implementation to determine
-its current input contract and whether it is suitable for the production model
-you propose.
+If `INSPECTOR_ALLOWED_ROOT` is not set, the folder the server was started in is
+used. Tool `review_repository`:
+
+| Argument | |
+|---|---|
+| `repo_path` (required) | absolute, or relative to the allowed root |
+| `base_ref` | same default as the CLI |
+| `format` | `json` (default) or `markdown` |
+
+Unknown arguments are rejected (for example the old `validationCommands`).
+Errors come back as tool results with `isError: true`.
 
 ## Project layout
 
 ```text
 src/core.ts         shared review orchestration
 src/cli.ts          command-line adapter
-src/mcp-server.ts   MCP adapter
+src/mcp.ts          MCP tool definition (createServer)
+src/mcp-server.ts   MCP stdio entry point
 src/git.ts          Git inspection
 src/validation.ts   validation execution
-src/report.ts       Markdown report generation
-test/               public starter tests
+src/report.ts       Markdown / JSON report generation
+test/               tests (use temporary git repos)
 ```
 
 When finished, submit via **Security → Report a vulnerability** on this
