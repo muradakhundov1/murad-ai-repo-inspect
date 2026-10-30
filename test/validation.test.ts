@@ -1,4 +1,6 @@
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { MAX_OUTPUT_CHARS, runValidation, runValidations } from "../src/validation.js";
 
@@ -22,6 +24,16 @@ describe("runValidation", () => {
   it("stops a command that runs too long", async () => {
     const result = await runValidation("sleep 5", cwd, 200);
     expect(result.status).toBe("timed_out");
+  });
+
+  it("also kills processes started by the command when it times out", async () => {
+    const marker = join(mkdtempSync(join(tmpdir(), "inspector-marker-")), "marker");
+    const script = `setTimeout(() => require('fs').writeFileSync('${marker}', ''), 1000)`;
+    const result = await runValidation(`node -e "${script}"; echo after`, cwd, 300);
+
+    expect(result.status).toBe("timed_out");
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(existsSync(marker)).toBe(false);
   });
 
   it("keeps only the end of very long output", async () => {

@@ -1,4 +1,4 @@
-import { exec } from "node:child_process";
+import { spawn } from "node:child_process";
 import type { ValidationResult } from "./types.js";
 
 export const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -14,30 +14,50 @@ export function limitOutput(output: string): { output: string; truncated: boolea
 
 export function runValidation(command: string, cwd: string, timeoutMs: number): Promise<ValidationResult> {
   return new Promise((resolve) => {
-    exec(command, { cwd, timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
-      let text = stdout;
-      if (stderr) {
-        text += (text ? "\n" : "") + stderr;
-      }
+    // detached = own process group, so on timeout we can kill the command and everything it started
+    const child = spawn(command, { cwd, shell: true, detached: true, stdio: ["ignore", "pipe", "pipe"] });
 
-      let status: ValidationResult["status"] = "passed";
-      let exitCode: number | null = 0;
-      if (error) {
-        status = "failed";
-        exitCode = typeof error.code === "number" ? error.code : null;
-        // node types say code is a number, but for this error it is a string
-        if ((error.code as unknown) === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
-          text += "\n[inspector] output was too large, command was stopped";
-        } else if (error.killed) {
-          status = "timed_out";
-          text += `\n[inspector] command timed out after ${timeoutMs} ms`;
-        } else if (exitCode === null) {
-          text += `\n[inspector] ${error.message}`;
-        }
-      }
+    let text = "";
+    let cutEarly = false;
+    let timedOut = false;
 
+    const addOutput = (chunk: Buffer) => {
+      text += chunk.toString("utf8");
+      if (text.length > MAX_OUTPUT_CHARS * 2) {
+        text = text.slice(-MAX_OUTPUT_CHARS);
+        cutEarly = true;
+      }
+    };
+    child.stdout.on("data", addOutput);
+    child.stderr.on("data", addOutput);
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        process.kill(-child.pid!, "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+    }, timeoutMs);
+
+    const finish = (status: ValidationResult["status"], exitCode: number | null) => {
+      clearTimeout(timer);
       const limited = limitOutput(text);
-      resolve({ command, status, exitCode, output: limited.output, truncated: limited.truncated });
+      resolve({ command, status, exitCode, output: limited.output, truncated: limited.truncated || cutEarly });
+    };
+
+    child.on("error", (error) => {
+      text += `\n[inspector] ${error.message}`;
+      finish("failed", null);
+    });
+
+    child.on("close", (code) => {
+      if (timedOut) {
+        text += `\n[inspector] command timed out after ${timeoutMs} ms`;
+        finish("timed_out", null);
+      } else {
+        finish(code === 0 ? "passed" : "failed", code);
+      }
     });
   });
 }
